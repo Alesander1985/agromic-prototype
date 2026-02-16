@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AgroMic — prototip</title>
+
+  <!-- MapLibre -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🌱</div>
+      <div>
+        <div class="title">AgroMic</div>
+        <div class="subtitle">Prototip (100% free, fără backend)</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="navbtn" data-view="dashboard">Dashboard</button>
+      <button class="navbtn" data-view="newFarm">Adaugă fermă</button>
+      <button class="navbtn" data-view="chat">Agronom virtual</button>
+      <button class="navbtn" data-view="settings">Setări</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view">
+      <div class="row">
+        <h1>Dashboard</h1>
+        <div class="right">
+          <button class="btn" id="btn-add-farm">+ Adaugă fermă</button>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>Fermele tale</h2>
+          <div id="farm-list" class="list"></div>
+          <div class="muted small">Datele sunt salvate local în browser (localStorage).</div>
+        </div>
+
+        <div class="card">
+          <h2>Notițe rapide</h2>
+          <textarea id="quick-notes" rows="8" placeholder="Scrie aici orice notițe..."></textarea>
+          <div class="row">
+            <button class="btn secondary" id="btn-save-notes">Salvează</button>
+            <button class="btn danger" id="btn-clear-all">Șterge tot (reset)</button>
+          </div>
+          <div class="muted small">Reset șterge fermele/culturile/chat-ul din acest browser.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW FARM -->
+    <section id="view-newFarm" class="view hidden">
+      <div class="row">
+        <h1>Adaugă fermă</h1>
+        <div class="right">
+          <button class="btn secondary" id="btn-cancel-farm">Înapoi</button>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>Detalii fermă</h2>
+
+          <label>Nume fermă</label>
+          <input id="farm-name" placeholder="Ex: Ferma Popescu" />
+
+          <label>Suprafață (ha)</label>
+          <input id="farm-area" type="number" min="0" step="0.01" placeholder="Ex: 1.5" />
+
+          <label>Localitate (sat/oraș)</label>
+          <div class="autocomplete">
+            <input id="farm-locality" placeholder="Începe să scrii (min 3 caractere)..." autocomplete="off" />
+            <div id="locality-suggestions" class="suggestions hidden"></div>
+          </div>
+
+          <div class="row smallgap">
+            <div class="col">
+              <label>Lat</label>
+              <input id="farm-lat" placeholder="ex: 45.75" />
+            </div>
+            <div class="col">
+              <label>Lon</label>
+              <input id="farm-lon" placeholder="ex: 21.23" />
+            </div>
+          </div>
+
+          <div class="muted small">
+            Selectează o sugestie sau mută pinul pe hartă. Coordonatele se actualizează automat.
+          </div>
+
+          <div class="row">
+            <button class="btn" id="btn-save-farm">Salvează ferma</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Hartă</h2>
+          <div id="map" class="map"></div>
+          <div class="muted small">Hartă: MapLibre + OpenStreetMap tiles.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FARM DETAILS -->
+    <section id="view-farm" class="view hidden">
+      <div class="row">
+        <div>
+          <h1 id="farm-title">Fermă</h1>
+          <div class="muted" id="farm-meta"></div>
+        </div>
+        <div class="right">
+          <button class="btn secondary" id="btn-back-dashboard">Înapoi la dashboard</button>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>Meteo & prognoză (7 zile)</h2>
+          <div id="weather-status" class="muted">Încarc...</div>
+          <div id="weather-current" class="weather"></div>
+          <div id="weather-forecast" class="forecast"></div>
+        </div>
+
+        <div class="card">
+          <h2>Avertizări</h2>
+          <div class="muted small">
+            Pentru MVP: încercăm MeteoAlarm (România). Dacă serverul blochează CORS pe GitHub Pages, afișăm fallback.
+          </div>
+          <div id="alerts-box" class="alerts"></div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="row">
+            <h2>Culturile fermei</h2>
+            <div class="right">
+              <button class="btn" id="btn-add-crop">+ Adaugă cultură</button>
+            </div>
+          </div>
+
+          <div id="crop-list" class="list"></div>
+        </div>
+
+        <div class="card">
+          <h2>Recomandări pentru săptămâna aceasta</h2>
+          <div id="reco-box" class="reco"></div>
+          <div class="muted small">
+            Recomandări generale (prototip). Pentru substanțe/doze, consultă un specialist și respectă eticheta produsului.
+          </div>
+        </div>
+      </div>
+
+      <!-- Add crop modal -->
+      <div id="modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="row">
+            <h3>Adaugă cultură</h3>
+            <div class="right"><button class="btn secondary" id="btn-close-modal">Închide</button></div>
+          </div>
+
+          <label>Cultură (din listă)</label>
+          <select id="crop-select"></select>
+
+          <label>Suprafață alocată (ha) (opțional)</label>
+          <input id="crop-area" type="number" min="0" step="0.01" placeholder="Ex: 0.2" />
+
+          <label>Data estimată plantare (opțional)</label>
+          <input id="crop-date" type="date" />
+
+          <label>Notițe (opțional)</label>
+          <textarea id="crop-notes" rows="3" placeholder="Ex: solar, irigare prin picurare..."></textarea>
+
+          <div class="row">
+            <button class="btn" id="btn-save-crop">Salvează cultura</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CHAT -->
+    <section id="view-chat" class="view hidden">
+      <div class="row">
+        <h1>Agronom virtual</h1>
+        <div class="right">
+          <select id="chat-farm-select"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted small">
+          Chat simulat pentru prototip. În etapa 2 îl legăm la AI real (API).
+        </div>
+
+        <div id="chat-log" class="chatlog"></div>
+
+        <div class="chatbox">
+          <input id="chat-input" placeholder="Întreabă: „Ce lucrări recomand pentru roșii săptămâna asta?”" />
+          <button class="btn" id="chat-send">Trimite</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view hidden">
+      <div class="row">
+        <h1>Setări</h1>
+      </div>
+
+      <div class="card">
+        <h2>Despre prototip</h2>
+        <ul class="bullets">
+          <li>Nu are conturi reale; datele stau doar în browserul tău (localStorage).</li>
+          <li>Meteo: Open-Meteo (fără cheie).</li>
+          <li>Hartă: MapLibre + OSM tiles (fără cheie).</li>
+          <li>Autocomplete: Nominatim (OSM) cu debounce.</li>
+          <li>Alerte: MeteoAlarm (poate fi blocat de CORS pe GitHub Pages; avem fallback).</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="muted small">AgroMic — prototip. ©</div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
