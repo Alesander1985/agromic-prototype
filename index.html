@@ -125,21 +125,34 @@
       </div>
 
       <div class="grid2">
-        <div class="card">
-          <h2>Meteo & prognoză (7 zile)</h2>
-          <div id="weather-status" class="muted">Încarc...</div>
-          <div id="weather-current" class="weather"></div>
-          <div id="weather-forecast" class="forecast"></div>
-        </div>
+  <div class="card">
+    <h2>Meteo & prognoză (7 zile)</h2>
+    <div id="weather-status" class="muted">Încarc...</div>
+    <div id="weather-current" class="weather"></div>
+    <div id="weather-forecast" class="forecast"></div>
+  </div>
 
-        <div class="card">
-          <h2>Avertizări</h2>
-          <div class="muted small">
-            Pentru MVP: încercăm MeteoAlarm (România). Dacă serverul blochează CORS pe GitHub Pages, afișăm fallback.
-          </div>
-          <div id="alerts-box" class="alerts"></div>
-        </div>
-      </div>
+  <div class="card">
+    <h2>Harta fermei</h2>
+    <div id="farm-map" class="map"></div>
+    <div class="muted small">Pinul arată locația fermei (poți da zoom/pan).</div>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Avertizări</h2>
+    <div class="muted small">
+      Pentru MVP: încercăm MeteoAlarm (România). Dacă serverul blochează CORS pe GitHub Pages, afișăm fallback.
+    </div>
+    <div id="alerts-box" class="alerts"></div>
+  </div>
+
+  <div class="card">
+    <h2>Info fermă</h2>
+    <div class="muted" id="farm-info-box"></div>
+  </div>
+</div>
 
       <div class="grid2">
         <div class="card">
