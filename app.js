@@ -98,6 +98,8 @@ let map = null;
 let marker = null;
 let mapReady = false;
 
+
+
 // -------------------- DOM helpers
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -214,10 +216,29 @@ function openFarm(id) {
   currentFarmId = id;
   state.ui.currentFarmId = id;
   saveState();
+
   renderFarmView();
   setView("farm");
+
+  setTimeout(() => {
+    // init map on farm dashboard
+    initFarmMapIfNeeded();
+
+    const farm = getCurrentFarm();
+    if (farm?.lat != null && farm?.lon != null) {
+      updateFarmMapLocation(Number(farm.lat), Number(farm.lon));
+
+      const info = $("#farm-info-box");
+      if (info) {
+        info.textContent =
+          `Localitate: ${farm.locality || "—"} • Coordonate: ${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)} • Suprafață: ${farm.areaHa ?? "—"} ha`;
+      }
+    }
+  }, 50);
+
   loadWeatherAndAlerts();
 }
+
 
 // -------------------- New farm: Map + Nominatim
 function initMapIfNeeded() {
@@ -349,6 +370,46 @@ async function nominatimSearch(query) {
   const data = await res.json();
   nominatimCache.set(q, data);
   return data;
+}
+// -------------------- Farm map (read-only) on farm dashboard
+let farmMap = null;
+let farmMarker = null;
+let farmMapReady = false;
+
+function initFarmMapIfNeeded() {
+  if (farmMapReady) return;
+
+  farmMap = new maplibregl.Map({
+    container: "farm-map",
+    style: {
+      version: 8,
+      sources: {
+        osm: {
+          type: "raster",
+          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+          tileSize: 256,
+          attribution: "© OpenStreetMap contributors"
+        }
+      },
+      layers: [{ id: "osm", type: "raster", source: "osm" }]
+    },
+    center: [DEFAULT_CENTER.lon, DEFAULT_CENTER.lat],
+    zoom: 12
+  });
+
+  farmMap.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
+
+  farmMarker = new maplibregl.Marker({ draggable: false })
+    .setLngLat([DEFAULT_CENTER.lon, DEFAULT_CENTER.lat])
+    .addTo(farmMap);
+
+  farmMapReady = true;
+}
+
+function updateFarmMapLocation(lat, lon) {
+  if (!farmMapReady) return;
+  farmMap.flyTo({ center: [lon, lat], zoom: 12 });
+  farmMarker.setLngLat([lon, lat]);
 }
 
 // -------------------- Save farm
@@ -1020,3 +1081,4 @@ document.addEventListener("click", (e) => {
   }
 });
 init();
+
