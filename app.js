@@ -1,6 +1,6 @@
 /* AgroMic — prototip SPA (fără backend)
  * - localStorage: ferme, culturi, notițe, chat
- * - MapLibre + OSM tiles, Nominatim autocomplete
+ * - MapLibre + OSM tiles, Nominatim autocomplete + reverse geocode (best-effort)
  * - Open-Meteo prognoză 7 zile
  * - MeteoAlarm (best-effort; poate pica din cauza CORS)
  */
@@ -94,11 +94,19 @@ const DEFAULT_CROPS = [
 const state = loadState();
 let currentFarmId = state.ui.currentFarmId || null;
 
+// -------------------- Maps (New farm)
 let map = null;
 let marker = null;
 let mapReady = false;
 
+// -------------------- Maps (Farm dashboard)
+let farmMap = null;
+let farmMarker = null;
+let farmMapReady = false;
 
+// -------------------- Fix location (repair-only)
+let fixLocationMode = false;
+let fixLocationOriginal = null;
 
 // -------------------- DOM helpers
 const $ = (sel) => document.querySelector(sel);
@@ -113,12 +121,9 @@ function setView(name) {
   }
   state.ui.currentView = name;
   saveState();
-
-  // highlight nav (optional)
 }
 
 function toast(msg) {
-  // minimal: alert; (keep simple)
   alert(msg);
 }
 
@@ -160,17 +165,18 @@ function renderFarmList() {
 
   if (!state.farms.length) {
     box.innerHTML = `<div class="muted">Nu ai încă nicio fermă. Apasă „Adaugă fermă”.</div>`;
+    renderChatFarmSelect();
     return;
   }
 
-  for (const farm of state.farms.slice().sort((a,b)=>b.createdAt-a.createdAt)) {
+  for (const farm of state.farms.slice().sort((a, b) => b.createdAt - a.createdAt)) {
     const el = document.createElement("div");
     el.className = "item";
 
     const meta = [
       farm.locality ? farm.locality : "—",
       farm.areaHa != null ? `${farm.areaHa} ha` : "suprafață nedefinită",
-      (farm.lat && farm.lon) ? `${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)}` : "fără coordonate"
+      (farm.lat != null && farm.lon != null) ? `${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)}` : "fără coordonate"
     ].join(" • ");
 
     el.innerHTML = `
@@ -198,18 +204,22 @@ function renderFarmList() {
     box.appendChild(el);
   }
 
-  // also render farm select for chat
   renderChatFarmSelect();
 }
 
 function deleteFarm(id) {
   if (!confirm("Sigur vrei să ștergi ferma și culturile asociate?")) return;
-  state.farms = state.farms.filter(f => f.id !== id);
-  state.crops = state.crops.filter(c => c.farmId !== id);
+  state.farms = state.farms.filter((f) => f.id !== id);
+  state.crops = state.crops.filter((c) => c.farmId !== id);
   if (currentFarmId === id) currentFarmId = null;
+  state.ui.currentFarmId = currentFarmId;
   saveState();
   renderFarmList();
   toast("Ferma a fost ștearsă.");
+}
+
+function getCurrentFarm() {
+  return state.farms.find((f) => f.id === currentFarmId) || null;
 }
 
 function openFarm(id) {
@@ -221,24 +231,16 @@ function openFarm(id) {
   setView("farm");
 
   setTimeout(() => {
-    // init map on farm dashboard
     initFarmMapIfNeeded();
-
     const farm = getCurrentFarm();
     if (farm?.lat != null && farm?.lon != null) {
       updateFarmMapLocation(Number(farm.lat), Number(farm.lon));
-
-      const info = $("#farm-info-box");
-      if (info) {
-        info.textContent =
-          `Localitate: ${farm.locality || "—"} • Coordonate: ${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)} • Suprafață: ${farm.areaHa ?? "—"} ha`;
-      }
+      renderFarmInfoBox(farm);
     }
   }, 50);
 
   loadWeatherAndAlerts();
 }
-
 
 // -------------------- New farm: Map + Nominatim
 function initMapIfNeeded() {
@@ -253,13 +255,13 @@ function initMapIfNeeded() {
           type: "raster",
           tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
           tileSize: 256,
-          attribution: "© OpenStreetMap contributors"
-        }
+          attribution: "© OpenStreetMap contributors",
+        },
       },
-      layers: [{ id: "osm", type: "raster", source: "osm" }]
+      layers: [{ id: "osm", type: "raster", source: "osm" }],
     },
     center: [DEFAULT_CENTER.lon, DEFAULT_CENTER.lat],
-    zoom: DEFAULT_CENTER.zoom
+    zoom: DEFAULT_CENTER.zoom,
   });
 
   map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
@@ -284,11 +286,12 @@ function initMapIfNeeded() {
 }
 
 let nominatimTimer = null;
-let nominatimCache = new Map();
+const nominatimCache = new Map();
 
 function setupLocalityAutocomplete() {
   const input = $("#farm-locality");
   const sugBox = $("#locality-suggestions");
+  if (!input || !sugBox) return;
 
   input.addEventListener("input", () => {
     const q = input.value.trim();
@@ -304,7 +307,7 @@ function setupLocalityAutocomplete() {
       try {
         const results = await nominatimSearch(q);
         renderSuggestions(results);
-      } catch (err) {
+      } catch {
         sugBox.classList.add("hidden");
         sugBox.innerHTML = "";
       }
@@ -327,7 +330,7 @@ function setupLocalityAutocomplete() {
       const row = document.createElement("div");
       row.className = "sug";
       row.innerHTML = `
-        <div>${escapeHtml(it.display_name.split(",").slice(0,2).join(", "))}</div>
+        <div>${escapeHtml(it.display_name.split(",").slice(0, 2).join(", "))}</div>
         <span class="small">${escapeHtml(it.display_name)}</span>
       `;
       row.addEventListener("click", () => {
@@ -335,8 +338,8 @@ function setupLocalityAutocomplete() {
         $("#farm-lat").value = String(Number(it.lat).toFixed(6));
         $("#farm-lon").value = String(Number(it.lon).toFixed(6));
 
-        // move map
-        const lat = Number(it.lat), lon = Number(it.lon);
+        const lat = Number(it.lat),
+          lon = Number(it.lon);
         if (mapReady) {
           map.flyTo({ center: [lon, lat], zoom: 12 });
           marker.setLngLat([lon, lat]);
@@ -353,7 +356,6 @@ async function nominatimSearch(query) {
   const q = query.toLowerCase();
   if (nominatimCache.has(q)) return nominatimCache.get(q);
 
-  // Nominatim policy: add a custom UA where possible (browser limits); keep calls low.
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "json");
   url.searchParams.set("addressdetails", "1");
@@ -361,21 +363,14 @@ async function nominatimSearch(query) {
   url.searchParams.set("countrycodes", "ro");
   url.searchParams.set("q", query);
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      "Accept": "application/json"
-    }
-  });
+  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error("Nominatim error");
   const data = await res.json();
   nominatimCache.set(q, data);
   return data;
 }
-// -------------------- Farm map (read-only) on farm dashboard
-let farmMap = null;
-let farmMarker = null;
-let farmMapReady = false;
 
+// -------------------- Farm dashboard map
 function initFarmMapIfNeeded() {
   if (farmMapReady) return;
 
@@ -388,13 +383,13 @@ function initFarmMapIfNeeded() {
           type: "raster",
           tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
           tileSize: 256,
-          attribution: "© OpenStreetMap contributors"
-        }
+          attribution: "© OpenStreetMap contributors",
+        },
       },
-      layers: [{ id: "osm", type: "raster", source: "osm" }]
+      layers: [{ id: "osm", type: "raster", source: "osm" }],
     },
     center: [DEFAULT_CENTER.lon, DEFAULT_CENTER.lat],
-    zoom: 12
+    zoom: 12,
   });
 
   farmMap.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
@@ -402,6 +397,17 @@ function initFarmMapIfNeeded() {
   farmMarker = new maplibregl.Marker({ draggable: false })
     .setLngLat([DEFAULT_CENTER.lon, DEFAULT_CENTER.lat])
     .addTo(farmMap);
+
+  // Sync inputs when dragging (only relevant in fix mode)
+  farmMarker.on("dragend", () => {
+    const ll = farmMarker.getLngLat();
+    const latEl = $("#fix-lat");
+    const lonEl = $("#fix-lon");
+    if (latEl && lonEl) {
+      latEl.value = String(ll.lat.toFixed(6));
+      lonEl.value = String(ll.lng.toFixed(6));
+    }
+  });
 
   farmMapReady = true;
 }
@@ -432,7 +438,7 @@ function saveFarmFromForm() {
     county: "",
     lat,
     lon,
-    createdAt: Date.now()
+    createdAt: Date.now(),
   };
 
   state.farms.push(farm);
@@ -450,39 +456,144 @@ function saveFarmFromForm() {
   openFarm(farm.id);
 }
 
-// -------------------- Farm view render
-function getCurrentFarm() {
-  return state.farms.find(f => f.id === currentFarmId) || null;
+// -------------------- Fix location (repair-only)
+function openFixLocationPanel() {
+  const farm = getCurrentFarm();
+  if (!farm) return;
+
+  // Ensure map exists before enabling drag
+  initFarmMapIfNeeded();
+  if (farm?.lat != null && farm?.lon != null) {
+    updateFarmMapLocation(Number(farm.lat), Number(farm.lon));
+  }
+
+  const panel = $("#fix-location-panel");
+  const latEl = $("#fix-lat");
+  const lonEl = $("#fix-lon");
+  if (!panel || !latEl || !lonEl) return;
+
+  fixLocationMode = true;
+  fixLocationOriginal = { lat: Number(farm.lat), lon: Number(farm.lon) };
+
+  panel.classList.remove("hidden");
+  latEl.value = String(Number(farm.lat).toFixed(6));
+  lonEl.value = String(Number(farm.lon).toFixed(6));
+
+  if (farmMarker) farmMarker.setDraggable(true);
 }
 
+function closeFixLocationPanel(revert = true) {
+  const panel = $("#fix-location-panel");
+  if (panel) panel.classList.add("hidden");
+
+  if (farmMarker) farmMarker.setDraggable(false);
+
+  if (revert && fixLocationOriginal) {
+    updateFarmMapLocation(fixLocationOriginal.lat, fixLocationOriginal.lon);
+  }
+
+  fixLocationMode = false;
+  fixLocationOriginal = null;
+}
+
+async function reverseGeocodeLocality(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error("Reverse geocoding error");
+  const data = await res.json();
+  const addr = data.address || {};
+  const locality =
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    addr.municipality ||
+    addr.hamlet ||
+    null;
+  const county = addr.county || null;
+  return { locality, county };
+}
+
+async function saveFixedLocation() {
+  const farm = getCurrentFarm();
+  if (!farm) return;
+
+  const latEl = $("#fix-lat");
+  const lonEl = $("#fix-lon");
+  if (!latEl || !lonEl) return;
+
+  const lat = Number(latEl.value);
+  const lon = Number(lonEl.value);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    alert("Coordonate invalide. Te rog introdu valori numerice.");
+    return;
+  }
+
+  // Persist coordonate
+  farm.lat = lat;
+  farm.lon = lon;
+
+  // Best-effort: update locality/county
+  try {
+    const r = await reverseGeocodeLocality(lat, lon);
+    if (r.locality) farm.locality = r.locality;
+    if (r.county) farm.county = r.county;
+  } catch (err) {
+    console.warn("Reverse geocoding failed", err);
+  }
+
+  saveState();
+
+  // Update UI + map + meteo
+  initFarmMapIfNeeded();
+  updateFarmMapLocation(lat, lon);
+  renderFarmView(); // updates title/meta/crops/reco placeholder
+  renderFarmInfoBox(farm); // ensures Info fermă updates NOW
+  loadWeatherAndAlerts();
+
+  closeFixLocationPanel(false);
+  alert("Locația a fost actualizată.");
+}
+
+function renderFarmInfoBox(farm) {
+  const info = $("#farm-info-box");
+  if (!info || !farm) return;
+
+  info.textContent =
+    `Localitate: ${farm.locality || "—"}${farm.county ? `, ${farm.county}` : ""}, Romania • ` +
+    `Coordonate: ${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)} • ` +
+    `Suprafață: ${farm.areaHa ?? "—"} ha`;
+}
+
+// -------------------- Farm view render
 function renderFarmView() {
   const farm = getCurrentFarm();
   if (!farm) {
     toast("Ferma nu a fost găsită.");
     setView("dashboard");
+    renderFarmList();
     return;
   }
 
-  $("#farm-title").textContent = farm.name;
-  $("#farm-meta").textContent = `${farm.locality} •`;
-
+  $("#farm-title").textContent = farm.name || "Fermă";
   const meta = [
     farm.areaHa != null ? `${farm.areaHa} ha` : "suprafață nedefinită",
     `${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)}`
   ].join(" • ");
   $("#farm-meta").textContent = meta;
 
+  renderFarmInfoBox(farm);
   renderCropList();
   renderRecommendations(null); // placeholder until weather loads
 }
 
 // -------------------- Crops
 function cropsForFarm(farmId) {
-  return state.crops.filter(c => c.farmId === farmId);
+  return state.crops.filter((c) => c.farmId === farmId);
 }
 
 function renderCropSelect() {
   const sel = $("#crop-select");
+  if (!sel) return;
   sel.innerHTML = "";
 
   const groups = new Map();
@@ -506,9 +617,11 @@ function renderCropSelect() {
 
 function renderCropList() {
   const box = $("#crop-list");
+  if (!box) return;
   box.innerHTML = "";
 
   const farm = getCurrentFarm();
+  if (!farm) return;
   const items = cropsForFarm(farm.id);
 
   if (!items.length) {
@@ -516,14 +629,14 @@ function renderCropList() {
     return;
   }
 
-  for (const c of items.slice().sort((a,b)=>b.createdAt-a.createdAt)) {
-    const cropMeta = DEFAULT_CROPS.find(x=>x.key===c.cropKey);
+  for (const c of items.slice().sort((a, b) => b.createdAt - a.createdAt)) {
+    const cropMeta = DEFAULT_CROPS.find((x) => x.key === c.cropKey);
     const label = cropMeta ? cropMeta.label : c.cropKey;
 
     const meta = [
       cropMeta?.group || "—",
       c.areaHa != null ? `${c.areaHa} ha` : "suprafață nedefinită",
-      c.plantingDate ? `plantare: ${c.plantingDate}` : "plantare: —"
+      c.plantingDate ? `plantare: ${c.plantingDate}` : "plantare: —",
     ].join(" • ");
 
     const el = document.createElement("div");
@@ -553,11 +666,10 @@ function renderCropList() {
 
 function deleteCrop(id) {
   if (!confirm("Ștergi cultura?")) return;
-  state.crops = state.crops.filter(c => c.id !== id);
+  state.crops = state.crops.filter((c) => c.id !== id);
   saveState();
   renderCropList();
   toast("Cultura a fost ștearsă.");
-  // refresh recommendations
   loadWeatherAndAlerts();
 }
 
@@ -577,7 +689,7 @@ function saveCropFromModal() {
     areaHa: area,
     plantingDate,
     notes,
-    createdAt: Date.now()
+    createdAt: Date.now(),
   };
 
   state.crops.push(item);
@@ -621,11 +733,11 @@ function renderWeather(data) {
   `;
 
   const daily = data.daily || {};
-  const days = (daily.time || []).slice(0,7);
+  const days = (daily.time || []).slice(0, 7);
   const fc = $("#weather-forecast");
   fc.innerHTML = "";
 
-  for (let i=0; i<days.length; i++){
+  for (let i = 0; i < days.length; i++) {
     const d = days[i];
     const tmax = daily.temperature_2m_max?.[i];
     const tmin = daily.temperature_2m_min?.[i];
@@ -645,7 +757,7 @@ function renderWeather(data) {
 }
 
 // Simple risk heuristics
-function riskLabel(cur){
+function riskLabel(cur) {
   const t = Number(cur.temperature_2m);
   const w = Number(cur.wind_speed_10m);
   const p = Number(cur.precipitation);
@@ -655,13 +767,13 @@ function riskLabel(cur){
   if (p >= 8) return "ploi";
   return "scăzut";
 }
-function riskPillClass(cur){
+function riskPillClass(cur) {
   const r = riskLabel(cur);
   if (r === "scăzut") return "ok";
   if (r === "ploi") return "warn";
   return "danger";
 }
-function dayRiskSummary(tmin, tmax, rain, wind){
+function dayRiskSummary(tmin, tmax, rain, wind) {
   const risks = [];
   if (tmin != null && tmin < 0) risks.push("îngheț");
   if (tmax != null && tmax > 32) risks.push("caniculă");
@@ -672,9 +784,7 @@ function dayRiskSummary(tmin, tmax, rain, wind){
 
 // -------------------- Alerts: MeteoAlarm (best-effort)
 async function fetchMeteoAlarmRomania() {
-  // Atenție: CORS poate bloca pe GitHub Pages.
-  // Dacă e blocat, prindem eroarea și afișăm fallback.
-  const url = "https://api.meteoalarm.org/v1/warnings?country=RO"; // endpoint public (poate varia)
+  const url = "https://api.meteoalarm.org/v1/warnings?country=RO";
   const res = await fetch(url);
   if (!res.ok) throw new Error("MeteoAlarm error");
   return res.json();
@@ -684,19 +794,22 @@ function renderAlerts(data) {
   const box = $("#alerts-box");
   box.innerHTML = "";
 
-  // Data format can differ; we keep it generic:
   const warnings = (data && (data.warnings || data.features || data)) || [];
   if (!warnings.length) {
     box.innerHTML = `<div class="muted">Nu sunt avertizări (sau nu au putut fi citite).</div>`;
     return;
   }
 
-  // show max 6
-  const list = Array.isArray(warnings) ? warnings.slice(0,6) : [];
+  const list = Array.isArray(warnings) ? warnings.slice(0, 6) : [];
   for (const w of list) {
     const title = w.title || w.event || w.properties?.event || "Avertizare";
     const sev = (w.severity || w.level || w.properties?.awareness_level || "").toString().toLowerCase();
-    const pill = sev.includes("red") || sev.includes("rosu") ? "danger" : (sev.includes("orange") || sev.includes("portocal") ? "warn" : "ok");
+    const pill =
+      sev.includes("red") || sev.includes("rosu")
+        ? "danger"
+        : sev.includes("orange") || sev.includes("portocal")
+          ? "warn"
+          : "ok";
     const desc = w.description || w.properties?.description || w.properties?.headline || "";
     const when = w.onset || w.properties?.onset || w.effective || w.properties?.effective || "";
 
@@ -707,9 +820,9 @@ function renderAlerts(data) {
         <div>
           <div class="name">${escapeHtml(title)}</div>
           <div class="meta">${escapeHtml(when ? `Data: ${when}` : "")}</div>
-          ${desc ? `<div class="meta">${escapeHtml(desc).slice(0,260)}${escapeHtml(desc).length>260?"…":""}</div>` : ""}
+          ${desc ? `<div class="meta">${escapeHtml(desc).slice(0, 260)}${escapeHtml(desc).length > 260 ? "…" : ""}</div>` : ""}
         </div>
-        <div class="pill ${pill}">${pill === "danger" ? "Sever" : (pill === "warn" ? "Moderat" : "Info")}</div>
+        <div class="pill ${pill}">${pill === "danger" ? "Sever" : pill === "warn" ? "Moderat" : "Info"}</div>
       </div>
     `;
     box.appendChild(el);
@@ -722,7 +835,7 @@ function renderAlertsFallback(errMsg) {
     <div class="item">
       <div class="name">Avertizări indisponibile în browser (CORS)</div>
       <div class="meta">
-        Unele API-uri nu permit acces direct din GitHub Pages. Ca fallback:
+        Une’le API-uri nu permit acces direct din GitHub Pages. Ca fallback:
         verifică avertizările pe site-uri oficiale sau activăm un proxy server în etapa 2.
       </div>
       <div class="meta">Detaliu: <span style="font-family:var(--mono)">${escapeHtml(errMsg || "")}</span></div>
@@ -744,27 +857,22 @@ function renderRecommendations(weatherData) {
     return;
   }
 
-  // Extract simple signals from forecast
   const signals = analyzeWeatherSignals(weatherData);
-
   const recos = [];
   recos.push(...generalReco(signals));
 
   for (const c of crops) {
-    const meta = DEFAULT_CROPS.find(x => x.key === c.cropKey);
+    const meta = DEFAULT_CROPS.find((x) => x.key === c.cropKey);
     recos.push(...cropReco(meta, signals));
   }
 
-  // Deduplicate
   const uniq = Array.from(new Set(recos)).slice(0, 12);
-
-  const html = `
+  box.innerHTML = `
     <div class="box">
       <div class="name">Checklist (prototip)</div>
-      <ul>${uniq.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+      <ul>${uniq.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
     </div>
   `;
-  box.innerHTML = html;
 }
 
 function analyzeWeatherSignals(data) {
@@ -773,7 +881,7 @@ function analyzeWeatherSignals(data) {
     heatRisk: false,
     heavyRainRisk: false,
     windRisk: false,
-    drySpell: false
+    drySpell: false,
   };
   if (!data?.daily) return s;
 
@@ -782,18 +890,18 @@ function analyzeWeatherSignals(data) {
   const rain = data.daily.precipitation_sum || [];
   const wind = data.daily.wind_speed_10m_max || [];
 
-  s.frostRisk = tmin.some(v => v != null && v < 0);
-  s.heatRisk = tmax.some(v => v != null && v > 32);
-  s.heavyRainRisk = rain.some(v => v != null && v > 20);
-  s.windRisk = wind.some(v => v != null && v > 50);
+  s.frostRisk = tmin.some((v) => v != null && v < 0);
+  s.heatRisk = tmax.some((v) => v != null && v > 32);
+  s.heavyRainRisk = rain.some((v) => v != null && v > 20);
+  s.windRisk = wind.some((v) => v != null && v > 50);
 
-  const rainSum = rain.reduce((a,b)=>a+(Number(b)||0),0);
+  const rainSum = rain.reduce((a, b) => a + (Number(b) || 0), 0);
   s.drySpell = rainSum < 5;
 
   return s;
 }
 
-function generalReco(sig){
+function generalReco(sig) {
   const out = [];
   if (sig.frostRisk) out.push("Protejează culturile sensibile la îngheț (agrotextil/folie) și evită tratamentele în nopți reci.");
   if (sig.heatRisk) out.push("Planifică udarea dimineața devreme/seara și verifică stresul hidric (frunze ofilite).");
@@ -804,7 +912,7 @@ function generalReco(sig){
   return out;
 }
 
-function cropReco(meta, sig){
+function cropReco(meta, sig) {
   const label = meta?.label || "cultura";
   const group = meta?.group || "";
   const out = [];
@@ -827,7 +935,6 @@ function cropReco(meta, sig){
     if (sig.drySpell) out.push(`(${label}) Mulcește la bază și udă constant (în special la ghivece).`);
   }
 
-  // generic risk add-ons
   if (sig.frostRisk) out.push(`(${label}) Evită fertilizările azotate înainte de nopți reci (risc de sensibilizare).`);
   return out;
 }
@@ -853,7 +960,6 @@ function renderChatFarmSelect() {
     sel.appendChild(opt);
   }
 
-  // choose current farm if exists
   sel.value = currentFarmId || state.farms[0].id;
 }
 
@@ -866,10 +972,11 @@ function getChatFarmId() {
 
 function renderChatLog() {
   const box = $("#chat-log");
+  if (!box) return;
   box.innerHTML = "";
   const farmId = getChatFarmId();
 
-  const msgs = state.chat.messages.filter(m => m.farmId === farmId);
+  const msgs = state.chat.messages.filter((m) => m.farmId === farmId);
   if (!msgs.length) {
     box.innerHTML = `<div class="muted">Spune-mi cu ce te pot ajuta. Exemplu: „Ce recomandări ai pentru roșii săptămâna asta?”</div>`;
     return;
@@ -894,17 +1001,22 @@ function addChatMessage(farmId, role, content) {
 }
 
 function agronomReply(question, farmId) {
-  const farm = state.farms.find(f => f.id === farmId);
-  const crops = state.crops.filter(c => c.farmId === farmId).map(c => DEFAULT_CROPS.find(x=>x.key===c.cropKey)?.label || c.cropKey);
+  const farm = state.farms.find((f) => f.id === farmId);
+  const crops = state.crops
+    .filter((c) => c.farmId === farmId)
+    .map((c) => DEFAULT_CROPS.find((x) => x.key === c.cropKey)?.label || c.cropKey);
 
   const q = question.toLowerCase();
 
-  // very simple “agent”
   if (q.includes("plant") || q.includes("plantez")) {
-    return `Pentru „când să plantezi”, am nevoie de cultura exactă și dacă e în câmp/solar. La ferma „${farm?.name || "—"}” ai: ${crops.length ? crops.join(", ") : "nicio cultură salvată"}. Spune-mi cultura și îți fac un plan pe 7–14 zile, adaptat la prognoza meteo.`;
+    return `Pentru „când să plantezi”, am nevoie de cultura exactă și dacă e în câmp/solar. La ferma „${farm?.name || "—"}” ai: ${
+      crops.length ? crops.join(", ") : "nicio cultură salvată"
+    }. Spune-mi cultura și îți fac un plan pe 7–14 zile, adaptat la prognoza meteo.`;
   }
   if (q.includes("ud") || q.includes("irig")) {
-    return `Udarea: încearcă dimineața devreme sau seara, cu udare profundă. Dacă ai perioadă uscată, mulcirea ajută mult. Pentru „${farm?.locality || "zona fermei"}”, verifică prognoza din dashboard și spune-mi cultura ca să calibrez mai bine.`;
+    return `Udarea: încearcă dimineața devreme sau seara, cu udare profundă. Dacă ai perioadă uscată, mulcirea ajută mult. Pentru „${
+      farm?.locality || "zona fermei"
+    }”, verifică prognoza din dashboard și spune-mi cultura ca să calibrez mai bine.`;
   }
   if (q.includes("pesticid") || q.includes("trat") || q.includes("strop")) {
     return `Pot să-ți dau recomandări generale (nu doze). Spune-mi cultura + simptom (ex: pete pe frunze, insecte). Important: respectă eticheta produsului și consultă un specialist pentru substanțe/doze.`;
@@ -913,8 +1025,9 @@ function agronomReply(question, farmId) {
     return `Recoltarea depinde de soi și stadiu. Spune-mi cultura și semnele observate (culoare, fermitate, dimensiune). Îți dau un checklist de „când e momentul bun” și pași de după recoltare.`;
   }
 
-  // default
-  return `OK. Ca să te ajut concret: 1) ce cultură ai în vedere, 2) câmp sau solar, 3) ce te îngrijorează (vreme/boli/dăunători/lucrări)? La ferma „${farm?.name || "—"}” ai: ${crops.length ? crops.join(", ") : "—"}.`;
+  return `OK. Ca să te ajut concret: 1) ce cultură ai în vedere, 2) câmp sau solar, 3) ce te îngrijorează (vreme/boli/dăunători/lucrări)? La ferma „${
+    farm?.name || "—"
+  }” ai: ${crops.length ? crops.join(", ") : "—"}.`;
 }
 
 // -------------------- Weather + Alerts load
@@ -933,12 +1046,11 @@ async function loadWeatherAndAlerts() {
     lastWeather = w;
     renderWeather(w);
     renderRecommendations(w);
-  } catch (e) {
+  } catch {
     $("#weather-status").textContent = "Nu am putut încărca meteo (încearcă din nou).";
     renderRecommendations(null);
   }
 
-  // Alerts
   $("#alerts-box").innerHTML = `<div class="muted">Încarc avertizări...</div>`;
   try {
     const a = await fetchMeteoAlarmRomania();
@@ -965,19 +1077,32 @@ function initNotes() {
 
 // -------------------- Event wiring
 function initNav() {
-  $$(".navbtn").forEach(btn => {
+  // top nav buttons
+  $$(".navbtn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const v = btn.dataset.view;
-      if (v === "dashboard") { setView("dashboard"); renderFarmList(); }
-      if (v === "newFarm") { setView("newFarm"); setTimeout(()=>{ initMapIfNeeded(); }, 50); }
-      if (v === "chat") { setView("chat"); renderChatFarmSelect(); renderChatLog(); }
-      if (v === "settings") { setView("settings"); }
+      if (v === "dashboard") {
+        setView("dashboard");
+        renderFarmList();
+      }
+      if (v === "newFarm") {
+        setView("newFarm");
+        setTimeout(() => initMapIfNeeded(), 50);
+      }
+      if (v === "chat") {
+        setView("chat");
+        renderChatFarmSelect();
+        renderChatLog();
+      }
+      if (v === "settings") {
+        setView("settings");
+      }
     });
   });
 
   $("#btn-add-farm").addEventListener("click", () => {
     setView("newFarm");
-    setTimeout(()=>{ initMapIfNeeded(); }, 50);
+    setTimeout(() => initMapIfNeeded(), 50);
   });
 
   $("#btn-cancel-farm").addEventListener("click", () => {
@@ -994,7 +1119,6 @@ function initNav() {
 
   // Crop modal
   $("#btn-add-crop").addEventListener("click", openModal);
-  $("#btn-close-modal").addEventListener("click", closeModal);
   $("#btn-save-crop").addEventListener("click", saveCropFromModal);
 
   // Chat
@@ -1003,19 +1127,31 @@ function initNav() {
     if (e.key === "Enter") sendChat();
   });
   $("#chat-farm-select").addEventListener("change", () => renderChatLog());
+
+  // Fix location buttons (if present in DOM)
+  const fixBtn = $("#btn-fix-location");
+  if (fixBtn) fixBtn.addEventListener("click", openFixLocationPanel);
+
+  const saveLocBtn = $("#btn-save-location");
+  if (saveLocBtn) saveLocBtn.addEventListener("click", saveFixedLocation);
+
+  const cancelLocBtn = $("#btn-cancel-location");
+  if (cancelLocBtn) cancelLocBtn.addEventListener("click", () => closeFixLocationPanel(true));
 }
 
-function openModal(){
+// -------------------- Modal
+function openModal() {
   renderCropSelect();
   $("#crop-area").value = "";
   $("#crop-date").value = "";
   $("#crop-notes").value = "";
   $("#modal").classList.remove("hidden");
 }
-function closeModal(){
+function closeModal() {
   $("#modal").classList.add("hidden");
 }
 
+// -------------------- Chat send
 function sendChat() {
   const input = $("#chat-input");
   const text = (input.value || "").trim();
@@ -1027,34 +1163,36 @@ function sendChat() {
   addChatMessage(farmId, "user", text);
   input.value = "";
 
-  // reply
   const reply = agronomReply(text, farmId);
   setTimeout(() => addChatMessage(farmId, "bot", reply), 250);
 }
 
 // -------------------- Utilities
-function fmt(v){
+function fmt(v) {
   if (v == null || Number.isNaN(Number(v))) return "—";
-  return String(Math.round(Number(v)*10)/10);
+  return String(Math.round(Number(v) * 10) / 10);
 }
-function formatDateShort(iso){
+function formatDateShort(iso) {
   const d = new Date(iso);
-  const opts = { weekday:"short", day:"2-digit", month:"2-digit" };
+  const opts = { weekday: "short", day: "2-digit", month: "2-digit" };
   return d.toLocaleDateString("ro-RO", opts);
 }
-function escapeHtml(str){
+function escapeHtml(str) {
   return String(str ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 // -------------------- Init app
 function init() {
   initNav();
-  closeModal();       
+
+  // ensure modal hidden on load
+  try { closeModal(); } catch (_) {}
+
   renderCropSelect();
   initNotes();
   setupLocalityAutocomplete();
@@ -1062,23 +1200,44 @@ function init() {
 
   // restore last view
   const v = state.ui.currentView || "dashboard";
-  if (v === "farm" && state.ui.currentFarmId && state.farms.some(f=>f.id===state.ui.currentFarmId)) {
+  if (
+    v === "farm" &&
+    state.ui.currentFarmId &&
+    state.farms.some((f) => f.id === state.ui.currentFarmId)
+  ) {
     currentFarmId = state.ui.currentFarmId;
     renderFarmView();
     setView("farm");
+
+    setTimeout(() => {
+      initFarmMapIfNeeded();
+      const farm = getCurrentFarm();
+      if (farm?.lat != null && farm?.lon != null) {
+        updateFarmMapLocation(Number(farm.lat), Number(farm.lon));
+        renderFarmInfoBox(farm);
+      }
+    }, 50);
+
     loadWeatherAndAlerts();
   } else {
     setView("dashboard");
   }
 }
 
+// Modal close fallback + background click
 document.addEventListener("click", (e) => {
   const closeBtn = e.target.closest("#btn-close-modal");
-  const modalBg = e.target.id === "modal"; // click pe fundalul întunecat
-
+  const modalBg = e.target.id === "modal";
   if (closeBtn || modalBg) {
     try { closeModal(); } catch (_) {}
   }
 });
-init();
 
+// Fix location fallback (works even if buttons appear after initNav)
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#btn-fix-location")) openFixLocationPanel();
+  if (e.target.closest("#btn-save-location")) saveFixedLocation();
+  if (e.target.closest("#btn-cancel-location")) closeFixLocationPanel(true);
+});
+
+init();
