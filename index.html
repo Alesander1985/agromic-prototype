@@ -148,9 +148,36 @@
     <div id="alerts-box" class="alerts"></div>
   </div>
 
-  <div class="card">
+<div class="card">
+  <div class="row">
     <h2>Info fermă</h2>
-    <div class="muted" id="farm-info-box"></div>
+    <div class="right">
+      <button class="btn secondary" id="btn-fix-location">Corectează locația</button>
+    </div>
+  </div>
+
+  <div class="muted" id="farm-info-box"></div>
+
+  <div id="fix-location-panel" class="hidden" style="margin-top:12px;">
+    <div class="muted small" style="margin-bottom:8px;">
+      Folosește doar dacă ai ales greșit locația. Locația afectează recomandările.
+    </div>
+
+    <div class="row smallgap">
+      <div class="col">
+        <label>Lat</label>
+        <input id="fix-lat" />
+      </div>
+      <div class="col">
+        <label>Lon</label>
+        <input id="fix-lon" />
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button class="btn" id="btn-save-location">Salvează</button>
+      <button class="btn secondary" id="btn-cancel-location">Anulează</button>
+    </div>
   </div>
 </div>
 
