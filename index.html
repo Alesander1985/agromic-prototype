@@ -40,7 +40,7 @@
         </div>
       </div>
 
-      <div class="grid2">
+      
         <div class="card">
           <h2>Fermele tale</h2>
           <div id="farm-list" class="list"></div>
@@ -68,7 +68,6 @@
         </div>
       </div>
 
-      <div class="grid2">
         <div class="card">
           <h2>Detalii fermă</h2>
 
@@ -113,76 +112,152 @@
     </section>
 
     <!-- FARM DETAILS -->
-    <section id="view-farm" class="view hidden">
-      <div class="row">
-        <div>
-          <h1 id="farm-title">Fermă</h1>
-          <div class="muted" id="farm-meta"></div>
-        </div>
-        <div class="right">
-          <button class="btn secondary" id="btn-back-dashboard">Înapoi la dashboard</button>
-        </div>
-      </div>
+<section id="view-farm" class="view hidden">
 
-      <div class="grid2">
-  <div class="card">
-    <h2>Meteo & prognoză (7 zile)</h2>
-    <div id="weather-status" class="muted">Încarc...</div>
-    <div id="weather-current" class="weather"></div>
-    <div id="weather-forecast" class="forecast"></div>
-  </div>
-
-  <div class="card">
-    <h2>Harta fermei</h2>
-    <div id="farm-map" class="map"></div>
-    <div class="muted small">Pinul arată locația fermei (poți da zoom/pan).</div>
-  </div>
-</div>
-
-<div class="grid2">
-  <div class="card">
-    <h2>Avertizări</h2>
-    <div class="muted small">
-      Pentru MVP: încercăm MeteoAlarm (România). Dacă serverul blochează CORS pe GitHub Pages, afișăm fallback.
+  <!-- ─── Top bar ─── -->
+  <header class="farm-topbar">
+    <div class="farm-topbar__left">
+      <h1 id="farm-title" class="farm-topbar__title">Fermă</h1>
+      <div class="muted" id="farm-meta"></div>
     </div>
-    <div id="alerts-box" class="alerts"></div>
-  </div>
-
-<div class="card">
-  <div class="row">
-    <h2>Info fermă</h2>
     <div class="right">
-      <button class="btn secondary" id="btn-fix-location">Corectează locația</button>
+      <button class="btn secondary" id="btn-back-dashboard">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:-2px;">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+        Înapoi la dashboard
+      </button>
     </div>
-  </div>
+  </header>
 
-  <div class="muted" id="farm-info-box"></div>
+  <!-- ─── Two-column layout ─── -->
+  <div class="farm-layout">
 
-  <div id="fix-location-panel" class="hidden" style="margin-top:12px;">
-    <div class="muted small" style="margin-bottom:8px;">
-      Folosește doar dacă ai ales greșit locația. Locația afectează recomandările.
-    </div>
+    <!-- ====== LEFT (main) COLUMN ====== -->
+    <div class="farm-layout__main">
 
-    <div class="row smallgap">
-      <div class="col">
-        <label>Lat</label>
-        <input id="fix-lat" />
+      <!-- Meteo -->
+      <div class="card card-meteo farm-card">
+        <div class="farm-card__header">
+          <h2>Meteo &amp; prognoză <span class="farm-card__badge">7 zile</span></h2>
+        </div>
+        <div id="weather-status" class="muted">Încarc...</div>
+        <div id="weather-current" class="weather"></div>
+        <div id="weather-forecast" class="forecast farm-forecast-scroll"></div>
       </div>
-      <div class="col">
-        <label>Lon</label>
-        <input id="fix-lon" />
+
+      <!-- Alerts -->
+      <div class="card card-alerts farm-card">
+        <div class="farm-card__header">
+          <h2>Avertizări</h2>
+        </div>
+        <div class="muted small">
+          Pentru MVP: încercăm MeteoAlarm (România). Dacă serverul blochează CORS pe GitHub Pages, afișăm fallback.
+        </div>
+        <div id="alerts-box" class="alerts"></div>
       </div>
-    </div>
 
-    <div class="row" style="margin-top:10px;">
-      <button class="btn" id="btn-save-location">Salvează</button>
-      <button class="btn secondary" id="btn-cancel-location">Anulează</button>
+      <!-- Info fermă -->
+      <div class="card card-info farm-card">
+        <div class="farm-card__header">
+          <h2>Info fermă</h2>
+          <div class="right">
+            <button class="btn secondary" id="btn-fix-location">Corectează locația</button>
+          </div>
+        </div>
+
+        <div class="muted" id="farm-info-box"></div>
+
+        <div id="fix-location-panel" class="hidden" style="margin-top:12px;">
+          <div class="muted small" style="margin-bottom:8px;">
+            Folosește doar dacă ai ales greșit locația. Locația afectează recomandările.
+          </div>
+
+          <div class="row smallgap">
+            <div class="col">
+              <label>Lat</label>
+              <input id="fix-lat" />
+            </div>
+            <div class="col">
+              <label>Lon</label>
+              <input id="fix-lon" />
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px;">
+            <button class="btn" id="btn-save-location">Salvează</button>
+            <button class="btn secondary" id="btn-cancel-location">Anulează</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Crops (FIX: am pus butonul #btn-add-crop în header) -->
+      <div class="card farm-card card-crops">
+        <div class="farm-card__header">
+          <h2>Culturi</h2>
+          <div class="right">
+            <button class="btn" id="btn-add-crop">+ Adaugă cultură</button>
+          </div>
+        </div>
+        <div id="crop-list"></div>
+      </div>
+
+      <!-- Audit (FIX: am pus containerul #audit-badges) -->
+      <div class="card farm-card card-audit">
+        <div class="farm-card__header">
+          <h2>Audit agricol (MVP)</h2>
+          <div class="badges" id="audit-badges"></div>
+        </div>
+        <div id="audit-box"></div>
+      </div>
+
+      <!-- Recommendations -->
+      <div class="card farm-card card-reco">
+        <div class="farm-card__header">
+          <h2>Recomandări</h2>
+        </div>
+        <div id="reco-box"></div>
+      </div>
+
     </div>
+    <!-- end main -->
+
+    <!-- ====== RIGHT (sidebar) COLUMN ====== -->
+    <aside class="farm-layout__side">
+
+      <!-- Map -->
+      <div class="card card-map farm-card farm-card--sticky">
+        <div class="farm-card__header">
+          <h2>Harta fermei</h2>
+        </div>
+        <div id="farm-map" class="map"></div>
+        <div class="muted small" style="margin-top:8px;">
+          Pinul arată locația fermei (poți da zoom/pan).
+        </div>
+      </div>
+
+      <!-- Quick summary (optional slot) -->
+      <div class="card farm-card farm-card--summary farm-card--sticky" id="farm-quick-summary">
+        <div class="farm-card__header">
+          <h2>Sumar rapid</h2>
+        </div>
+        <ul class="farm-summary-list">
+          <li><span class="farm-summary-list__label">Culturi</span><span class="farm-summary-list__value" id="summary-crops">—</span></li>
+          <li><span class="farm-summary-list__label">Suprafață</span><span class="farm-summary-list__value" id="summary-area">—</span></li>
+          <li><span class="farm-summary-list__label">Avertizări</span><span class="farm-summary-list__value" id="summary-alerts">—</span></li>
+        </ul>
+      </div>
+
+    </aside>
+    <!-- end side -->
+
   </div>
-</div>
+  <!-- end farm-layout -->
 
-      <div class="grid2">
-        <div class="card">
+</section>
+
+        <div class="card card-crops">
           <div class="row">
             <h2>Culturile fermei</h2>
             <div class="right">
@@ -194,6 +269,16 @@
         </div>
 
         <div class="card">
+          <div class="card card-audit">
+            <h2>Audit agricol (MVP)</h2>
+            <div class="right">
+            <div id="audit-badges" class="badges"></div>
+            </div>
+          </div>
+          <div id="audit-box" class="audit"></div>
+        </div>
+
+        <div class="card card-reco">
           <h2>Recomandări pentru săptămâna aceasta</h2>
           <div id="reco-box" class="reco"></div>
           <div class="muted small">
@@ -201,6 +286,7 @@
           </div>
         </div>
       </div>
+</div> <!-- end farm-grid -->
 
       <!-- Add crop modal -->
       <div id="modal" class="modal hidden">
