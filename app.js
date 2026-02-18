@@ -242,6 +242,19 @@ function openFarm(id) {
   loadWeatherAndAlerts();
 }
 
+function renderFarmQuickSummary() {
+  const farm = getCurrentFarm();
+  if (!farm) return;
+
+  const elCrops = document.querySelector("#summary-crops");
+  const elArea = document.querySelector("#summary-area");
+  const elAlerts = document.querySelector("#summary-alerts");
+
+  if (elCrops) elCrops.textContent = String(cropsForFarm(farm.id).length);
+  if (elArea) elArea.textContent = (farm.areaHa != null && farm.areaHa !== "") ? `${farm.areaHa} ha` : "—";
+  if (elAlerts) elAlerts.textContent = "indisp."; // se setează după ce se încarcă avertizările
+}
+
 // -------------------- New farm: Map + Nominatim
 function initMapIfNeeded() {
   if (mapReady) return;
@@ -338,8 +351,7 @@ function setupLocalityAutocomplete() {
         $("#farm-lat").value = String(Number(it.lat).toFixed(6));
         $("#farm-lon").value = String(Number(it.lon).toFixed(6));
 
-        const lat = Number(it.lat),
-          lon = Number(it.lon);
+        const lat = Number(it.lat), lon = Number(it.lon);
         if (mapReady) {
           map.flyTo({ center: [lon, lat], zoom: 12 });
           marker.setLngLat([lon, lat]);
@@ -398,7 +410,6 @@ function initFarmMapIfNeeded() {
     .setLngLat([DEFAULT_CENTER.lon, DEFAULT_CENTER.lat])
     .addTo(farmMap);
 
-  // Sync inputs when dragging (only relevant in fix mode)
   farmMarker.on("dragend", () => {
     const ll = farmMarker.getLngLat();
     const latEl = $("#fix-lat");
@@ -445,7 +456,6 @@ function saveFarmFromForm() {
   saveState();
   renderFarmList();
 
-  // reset form
   $("#farm-name").value = "";
   $("#farm-area").value = "";
   $("#farm-locality").value = "";
@@ -461,7 +471,6 @@ function openFixLocationPanel() {
   const farm = getCurrentFarm();
   if (!farm) return;
 
-  // Ensure map exists before enabling drag
   initFarmMapIfNeeded();
   if (farm?.lat != null && farm?.lon != null) {
     updateFarmMapLocation(Number(farm.lat), Number(farm.lon));
@@ -528,11 +537,9 @@ async function saveFixedLocation() {
     return;
   }
 
-  // Persist coordonate
   farm.lat = lat;
   farm.lon = lon;
 
-  // Best-effort: update locality/county
   try {
     const r = await reverseGeocodeLocality(lat, lon);
     if (r.locality) farm.locality = r.locality;
@@ -543,11 +550,10 @@ async function saveFixedLocation() {
 
   saveState();
 
-  // Update UI + map + meteo
   initFarmMapIfNeeded();
   updateFarmMapLocation(lat, lon);
-  renderFarmView(); // updates title/meta/crops/reco placeholder
-  renderFarmInfoBox(farm); // ensures Info fermă updates NOW
+  renderFarmView();
+  renderFarmInfoBox(farm);
   loadWeatherAndAlerts();
 
   closeFixLocationPanel(false);
@@ -558,10 +564,14 @@ function renderFarmInfoBox(farm) {
   const info = $("#farm-info-box");
   if (!info || !farm) return;
 
-  info.textContent =
-    `Localitate: ${farm.locality || "—"}${farm.county ? `, ${farm.county}` : ""}, Romania • ` +
-    `Coordonate: ${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)} • ` +
-    `Suprafață: ${farm.areaHa ?? "—"} ha`;
+  const county = farm.county ? farm.county : null;
+
+  info.innerHTML =
+    `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">` +
+      `<div><b>Localitate:</b> ${escapeHtml(farm.locality || "—")}${county ? `, ${escapeHtml(county)}` : ""}, Romania</div>` +
+      `<div><b>Coordonate:</b> ${Number(farm.lat).toFixed(4)}, ${Number(farm.lon).toFixed(4)}</div>` +
+      `<div><b>Suprafață:</b> ${escapeHtml(farm.areaHa ?? "—")} ha</div>` +
+    `</div>`;
 }
 
 // -------------------- Farm view render
@@ -583,7 +593,10 @@ function renderFarmView() {
 
   renderFarmInfoBox(farm);
   renderCropList();
-  renderRecommendations(null); // placeholder until weather loads
+  renderRecommendations(null);
+
+  // ✅ update summary (crops + area, alerts stays "—" until loaded)
+  renderFarmQuickSummary();
 }
 
 // -------------------- Crops
@@ -835,10 +848,172 @@ function renderAlertsFallback(errMsg) {
     <div class="item">
       <div class="name">Avertizări indisponibile în browser (CORS)</div>
       <div class="meta">
-        Une’le API-uri nu permit acces direct din GitHub Pages. Ca fallback:
+        Unele API-uri nu permit acces direct din GitHub Pages. Ca fallback:
         verifică avertizările pe site-uri oficiale sau activăm un proxy server în etapa 2.
       </div>
       <div class="meta">Detaliu: <span style="font-family:var(--mono)">${escapeHtml(errMsg || "")}</span></div>
+    </div>
+  `;
+}
+
+// -------------------- Audit agricol (MVP)
+function climateRegionHeuristic(lat, lon) {
+  if (lon < 22.0) return "Vest (influență oceanică)";
+  if (lon > 26.0) return "Est (continental)";
+  if (lat > 46.6) return "Nord (mai răcoros)";
+  if (lat < 45.2) return "Sud (mai cald)";
+  return "Centru (mixt)";
+}
+
+function dayNameRO(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString("ro-RO", { weekday: "short" });
+}
+
+function computeWorkWindow(weatherData, opts) {
+  if (!weatherData?.daily) return null;
+
+  const days = weatherData.daily.time || [];
+  const rain = weatherData.daily.precipitation_sum || [];
+  const wind = weatherData.daily.wind_speed_10m_max || [];
+
+  const OK_RAIN_MM = opts?.okRainMm ?? 3;
+  const OK_WIND_KMH = opts?.okWindKmh ?? 28;
+  const labelBad = opts?.labelBad ?? "Nu există o fereastră bună în următoarele 7 zile.";
+
+  const okIdx = [];
+  for (let i = 0; i < Math.min(7, days.length); i++) {
+    const r = Number(rain[i] ?? 0);
+    const w = Number(wind[i] ?? 0);
+    if (r <= OK_RAIN_MM && w <= OK_WIND_KMH) okIdx.push(i);
+  }
+
+  if (!okIdx.length) return { text: labelBad, quality: "bad" };
+
+  let bestStart = okIdx[0], bestEnd = okIdx[0];
+  let curStart = okIdx[0], curEnd = okIdx[0];
+
+  for (let k = 1; k < okIdx.length; k++) {
+    const idx = okIdx[k];
+    if (idx === curEnd + 1) {
+      curEnd = idx;
+    } else {
+      if (curEnd - curStart > bestEnd - bestStart) {
+        bestStart = curStart; bestEnd = curEnd;
+      }
+      curStart = idx; curEnd = idx;
+    }
+  }
+  if (curEnd - curStart > bestEnd - bestStart) {
+    bestStart = curStart; bestEnd = curEnd;
+  }
+
+  const startName = dayNameRO(days[bestStart]);
+  const endName = dayNameRO(days[bestEnd]);
+  const length = bestEnd - bestStart + 1;
+
+  const text = length === 1
+    ? `${startName} (o zi potrivită)`
+    : `${startName}–${endName} (${length} zile potrivite)`;
+
+  return { text, quality: length >= 3 ? "good" : "ok" };
+}
+
+function computeWorkWindows(weatherData) {
+  const spray = computeWorkWindow(weatherData, {
+    okRainMm: 2,
+    okWindKmh: 20,
+    labelBad: "Nu se recomandă stropiri în următoarele 7 zile (vânt/ploaie)."
+  });
+
+  const soil = computeWorkWindow(weatherData, {
+    okRainMm: 1,
+    okWindKmh: 35,
+    labelBad: "Nu se recomandă lucrări pe sol în următoarele 7 zile (prea umed)."
+  });
+
+  return { spray, soil };
+}
+
+function auditScoreFromSignals(signals, cropsCount) {
+  let score = 100;
+  if (signals.frostRisk) score -= 18;
+  if (signals.heatRisk) score -= 14;
+  if (signals.heavyRainRisk) score -= 12;
+  if (signals.windRisk) score -= 10;
+  if (signals.drySpell) score -= 10;
+
+  if (cropsCount >= 4) score -= 6;
+  if (cropsCount >= 7) score -= 8;
+
+  score = Math.max(0, Math.min(100, score));
+  return score;
+}
+
+function auditSummary(score) {
+  if (score >= 85) return "Stare foarte bună (risc meteo scăzut).";
+  if (score >= 70) return "Stare bună (atenție la câteva riscuri).";
+  if (score >= 50) return "Stare medie (planifică măsuri preventive).";
+  return "Stare critică (risc ridicat în următoarele zile).";
+}
+
+function renderAudit(weatherData) {
+  const farm = getCurrentFarm();
+  const box = $("#audit-box");
+  const badges = $("#audit-badges");
+  if (!farm || !box || !badges) return;
+
+  const lat = Number(farm.lat);
+  const lon = Number(farm.lon);
+
+  const region = climateRegionHeuristic(lat, lon);
+  const countyBadge = farm.county ? `<span class="badge">${escapeHtml(farm.county)}</span>` : "";
+  const regionBadge = `<span class="badge">${escapeHtml(region)}</span>`;
+  badges.innerHTML = `${countyBadge}${regionBadge}`;
+
+  const crops = cropsForFarm(farm.id);
+  const signals = analyzeWeatherSignals(weatherData);
+  const score = auditScoreFromSignals(signals, crops.length);
+
+  const riskList = [];
+  if (signals.frostRisk) riskList.push("Îngheț posibil");
+  if (signals.heatRisk) riskList.push("Caniculă posibilă");
+  if (signals.heavyRainRisk) riskList.push("Ploi abundente");
+  if (signals.windRisk) riskList.push("Vânt puternic");
+  if (signals.drySpell) riskList.push("Perioadă uscată");
+
+  const risksText = riskList.length ? riskList.join(" • ") : "Nu apar riscuri majore în următoarele zile.";
+
+  const actions = [];
+  if (signals.frostRisk) actions.push("Pregătește protecții pentru culturile sensibile (folie/agrotextil).");
+  if (signals.heatRisk) actions.push("Planifică udări dimineața/seara + mulcire.");
+  if (signals.heavyRainRisk) actions.push("Verifică drenajul și evită lucrări pe sol ud.");
+  if (signals.windRisk) actions.push("Fixează susținerile/aracii și folia.");
+  if (!actions.length) actions.push("Menține monitorizarea de rutină (2–3 inspecții/săptămână).");
+
+  const ww = computeWorkWindows(weatherData);
+
+  box.innerHTML = `
+    <div class="auditTop">
+      <div class="auditScore">${score}</div>
+      <div>
+        <div class="auditTitle">${escapeHtml(auditSummary(score))}</div>
+        <div class="muted small">${escapeHtml(risksText)}</div>
+
+        <div class="muted small" style="margin-top:6px;">
+          <b>Fereastră stropiri:</b> ${escapeHtml(ww?.spray ? ww.spray.text : "—")}
+        </div>
+        <div class="muted small">
+          <b>Fereastră lucrări sol:</b> ${escapeHtml(ww?.soil ? ww.soil.text : "—")}
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="name">Acțiuni recomandate (MVP)</div>
+      <ul style="margin:8px 0 0 18px;">
+        ${actions.slice(0, 6).map(a => `<li>${escapeHtml(a)}</li>`).join("")}
+      </ul>
     </div>
   `;
 }
@@ -1037,26 +1212,50 @@ async function loadWeatherAndAlerts() {
   const farm = getCurrentFarm();
   if (!farm) return;
 
-  $("#weather-status").textContent = "Încarc meteo...";
-  $("#weather-current").innerHTML = "";
-  $("#weather-forecast").innerHTML = "";
+  // reset UI
+  const ws = $("#weather-status");
+  const wc = $("#weather-current");
+  const wf = $("#weather-forecast");
+  if (ws) ws.textContent = "Încarc meteo...";
+  if (wc) wc.innerHTML = "";
+  if (wf) wf.innerHTML = "";
+
+  // preset summary alerts
+  const sumAlerts = document.querySelector("#summary-alerts");
+  if (sumAlerts) sumAlerts.textContent = "—";
 
   try {
     const w = await fetchWeather(farm.lat, farm.lon);
     lastWeather = w;
     renderWeather(w);
     renderRecommendations(w);
+    renderAudit(w);
   } catch {
-    $("#weather-status").textContent = "Nu am putut încărca meteo (încearcă din nou).";
+    if (ws) ws.textContent = "Nu am putut încărca meteo (încearcă din nou).";
     renderRecommendations(null);
+    renderAudit(null);
   }
 
-  $("#alerts-box").innerHTML = `<div class="muted">Încarc avertizări...</div>`;
+  const ab = $("#alerts-box");
+  if (ab) ab.innerHTML = `<div class="muted">Încarc avertizări...</div>`;
+
   try {
     const a = await fetchMeteoAlarmRomania();
     renderAlerts(a);
+
+    // ✅ update summary alerts count
+    const elAlerts = document.querySelector("#summary-alerts");
+    if (elAlerts) {
+      const warnings = (a && (a.warnings || a.features || a)) || [];
+      const n = Array.isArray(warnings) ? warnings.length : 0;
+      elAlerts.textContent = `${n}`;
+    }
   } catch (e) {
     renderAlertsFallback(e?.message || String(e));
+
+    // ✅ summary fallback
+    const elAlerts = document.querySelector("#summary-alerts");
+    if (elAlerts) elAlerts.textContent = "—";
   }
 }
 
@@ -1077,7 +1276,6 @@ function initNotes() {
 
 // -------------------- Event wiring
 function initNav() {
-  // top nav buttons
   $$(".navbtn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const v = btn.dataset.view;
@@ -1117,18 +1315,15 @@ function initNav() {
     renderFarmList();
   });
 
-  // Crop modal
   $("#btn-add-crop").addEventListener("click", openModal);
   $("#btn-save-crop").addEventListener("click", saveCropFromModal);
 
-  // Chat
   $("#chat-send").addEventListener("click", sendChat);
   $("#chat-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
   });
   $("#chat-farm-select").addEventListener("change", () => renderChatLog());
 
-  // Fix location buttons (if present in DOM)
   const fixBtn = $("#btn-fix-location");
   if (fixBtn) fixBtn.addEventListener("click", openFixLocationPanel);
 
@@ -1190,7 +1385,6 @@ function escapeHtml(str) {
 function init() {
   initNav();
 
-  // ensure modal hidden on load
   try { closeModal(); } catch (_) {}
 
   renderCropSelect();
@@ -1198,7 +1392,6 @@ function init() {
   setupLocalityAutocomplete();
   renderFarmList();
 
-  // restore last view
   const v = state.ui.currentView || "dashboard";
   if (
     v === "farm" &&
@@ -1224,7 +1417,6 @@ function init() {
   }
 }
 
-// Modal close fallback + background click
 document.addEventListener("click", (e) => {
   const closeBtn = e.target.closest("#btn-close-modal");
   const modalBg = e.target.id === "modal";
@@ -1233,7 +1425,6 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// Fix location fallback (works even if buttons appear after initNav)
 document.addEventListener("click", (e) => {
   if (e.target.closest("#btn-fix-location")) openFixLocationPanel();
   if (e.target.closest("#btn-save-location")) saveFixedLocation();
